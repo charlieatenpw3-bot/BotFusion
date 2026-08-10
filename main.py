@@ -343,4 +343,4 @@ if __name__ == "__main__":
   if TOKEN:
     bot.run(TOKEN)
   else:
-    print("❌ Lỗi: Không tìm thấy DISCORD_TOKEN trong Environment Variables!"
+    print("❌ Lỗi: Không tìm thấy DISCORD_TOKEN trong Environment Variables!")
