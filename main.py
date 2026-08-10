@@ -5,7 +5,7 @@ import time
 from threading import Thread
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.ui import Button, View
 from flask import Flask
 import pymongo
@@ -59,6 +59,8 @@ def lay_user_data(user_id: int):
             "vi_tien": 1000,
             "tien_no": 0,
             "lan_tinh_lai": time.time(),
+            "tien_no_xau": 0,
+            "lan_tinh_lai_xau": time.time(),
             "lan_diem_danh": 0,
             "da_dung_code": False,
             "lan_cuoi_lam": 0,
@@ -67,9 +69,10 @@ def lay_user_data(user_id: int):
         users_col.insert_one(user_data)
 
     now = time.time()
+    
+    # 1. Tính lãi Ngân Hàng (5%/ngày)
     lan_tinh_lai = user_data.get("lan_tinh_lai", now)
     tien_no = user_data.get("tien_no", 0)
-
     if tien_no > 0 and (now - lan_tinh_lai) >= 86400:
         so_ngay = int((now - lan_tinh_lai) // 86400)
         tien_no = int(tien_no * (1.05 ** so_ngay))
@@ -79,6 +82,20 @@ def lay_user_data(user_id: int):
         cap_nhat_user_data(
             user_id,
             {"tien_no": tien_no, "lan_tinh_lai": lan_tinh_lai_moi},
+        )
+
+    # 2. Tính lãi Nợ Xấu (30%/giờ)
+    lan_tinh_lai_xau = user_data.get("lan_tinh_lai_xau", now)
+    tien_no_xau = user_data.get("tien_no_xau", 0)
+    if tien_no_xau > 0 and (now - lan_tinh_lai_xau) >= 3600:
+        so_gio = int((now - lan_tinh_lai_xau) // 3600)
+        tien_no_xau = int(tien_no_xau * (1.30 ** so_gio))
+        lan_tinh_lai_xau_moi = lan_tinh_lai_xau + (so_gio * 3600)
+        user_data["tien_no_xau"] = tien_no_xau
+        user_data["lan_tinh_lai_xau"] = lan_tinh_lai_xau_moi
+        cap_nhat_user_data(
+            user_id,
+            {"tien_no_xau": tien_no_xau, "lan_tinh_lai_xau": lan_tinh_lai_xau_moi},
         )
 
     return user_data
@@ -104,6 +121,9 @@ def lay_guild_config(guild_id: int):
             "_id": guild_id,
             "allowed_channels": [],
             "command_channels": {},
+            "tb_vay_channel": None,
+            "tb_trano_channel": None,
+            "tb_noxau_channel": None,
         }
         guild_settings_col.insert_one(config)
     return config
@@ -133,6 +153,13 @@ EIGHTBALL_RESPONSES = [
     "Nên cẩn trọng thì hơn! ⚠️", "Mọi chuyện rồi sẽ tốt đẹp thôi. 🌈"
 ]
 
+GIANG_HO_CHUI = [
+    "Thích bùng nợ giang hồ à cháu? Trả ngay không mày xác định với tụi tao! 🤜🔥",
+    "Trốn đi đâu? Đã 2 tiếng trôi qua rồi mà không thấy 1 xu nợ xấu nào! Trả tiền mau! 🩸🔪",
+    "Có gan vay nợ xấu 30%/h mà không có gan trả à? Giang hồ tới tận nhà tìm mày giờ đó! 😡💀",
+    "Alo alo <@{id}>, định bùng nợ đúng không? Đừng để bọn này ra tay nhé! 🚗💥"
+]
+
 # ==========================================
 # CẤU HÌNH BOT DISCORD & MIDDLEWARE
 # ==========================================
@@ -151,6 +178,8 @@ async def check_channel_permissions(ctx):
     if ctx.command.name in [
         "setupbot",
         "botchucnangkenh",
+        "settb",
+        "settbnoxau",
         "taodanhmuc",
         "taokenh",
         "taonhanh",
@@ -196,6 +225,33 @@ async def check_channel_permissions(ctx):
 @bot.event
 async def on_ready():
     print(f"Bot {bot.user} đã sẵn sàng hoạt động!")
+    if not quat_giang_ho_doi_no.is_running():
+        quat_giang_ho_doi_no.start()
+
+
+# --- TASK TỰ ĐỘNG LỌC VÀ CHỬI KHI NỢ XẤU QUÁ 2 TIẾNG ---
+@tasks.loop(minutes=30)
+async def quat_giang_ho_doi_no():
+    now = time.time()
+    for user in users_col.find({"tien_no_xau": {"$gt": 0}}):
+        user_id = user["_id"]
+        lan_tinh_lai = user.get("lan_tinh_lai_xau", now)
+        
+        # Nếu nợ xấu quá 2 tiếng (7200 giây)
+        if (now - lan_tinh_lai) >= 7200:
+            for guild in bot.guilds:
+                config = lay_guild_config(guild.id)
+                tb_noxau_id = config.get("tb_noxau_channel")
+                if tb_noxau_id:
+                    channel = guild.get_channel(tb_noxau_id)
+                    member = guild.get_member(user_id)
+                    if channel and member:
+                        chui_msg = random.choice(GIANG_HO_CHUI).format(id=user_id)
+                        await channel.send(
+                            f"🚨 **GIANG HỒ ĐÒI NỢ SỐ LÔ/NỢ XẤU:**\n"
+                            f"👉 <@{user_id}> đang nợ **{user['tien_no_xau']} xu** quá 2 tiếng chưa trả!\n"
+                            f"💬 *{chui_msg}*"
+                        )
 
 
 # ==========================================
@@ -264,7 +320,72 @@ async def botchucnangkenh(ctx, cmd_name: str, channel: discord.TextChannel = Non
     await ctx.send(f"🎯 Lệnh `.{cmd_clean}` từ bây giờ chỉ có thể dùng tại kênh {channel.mention}!")
 
 
-# --- LỆNH TẠO DANH MỤC ĐƠN LE ---
+# --- 📢 LỆNH SET KÊNH THÔNG BÁO VAY / TRẢ NỢ THƯỜNG ---
+@bot.command(name="settb")
+@commands.has_permissions(manage_guild=True)
+async def settb(ctx, *, noi_dung: str = None):
+    if not noi_dung or "|" not in noi_dung:
+        return await ctx.send(
+            "❌ Cú pháp chưa đúng!\n"
+            "👉 Vay: `.settb vay | #kênh`\n"
+            "👉 Trả nợ: `.settb trano | #kênh`"
+        )
+
+    parts = noi_dung.split("|", 1)
+    loai_tb = parts[0].strip().lower()
+    kenh_mention = parts[1].strip()
+
+    if not ctx.message.channel_mentions:
+        return await ctx.send("❌ Vui lòng gắn thẻ kênh! Ví dụ: `.settb vay | #thong-bao-vay`")
+
+    channel = ctx.message.channel_mentions[0]
+
+    if loai_tb == "vay":
+        guild_settings_col.update_one(
+            {"_id": ctx.guild.id},
+            {"$set": {"tb_vay_channel": channel.id}},
+            upsert=True
+        )
+        await ctx.send(f"🏦 Đã cài đặt kênh {channel.mention} làm kênh thông báo **VAY TIỀN**!")
+    elif loai_tb in ["trano", "tra"]:
+        guild_settings_col.update_one(
+            {"_id": ctx.guild.id},
+            {"$set": {"tb_trano_channel": channel.id}},
+            upsert=True
+        )
+        await ctx.send(f"💳 Đã cài đặt kênh {channel.mention} làm kênh thông báo **TRẢ NỢ**!")
+    else:
+        await ctx.send("❌ Loại thông báo không hợp lệ! Dùng `vay` hoặc `trano`.")
+
+
+@settb.error
+async def settb_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Bạn cần có quyền **Quản lý máy chủ** để dùng lệnh này!")
+
+
+# --- 📢 LỆNH SET KÊNH THÔNG BÁO NỢ XẤU ---
+@bot.command(name="settbnoxau")
+@commands.has_permissions(manage_guild=True)
+async def settbnoxau(ctx, channel: discord.TextChannel = None):
+    if not channel:
+        return await ctx.send("❌ Cú pháp: `.settbnoxau #kênh`!")
+
+    guild_settings_col.update_one(
+        {"_id": ctx.guild.id},
+        {"$set": {"tb_noxau_channel": channel.id}},
+        upsert=True
+    )
+    await ctx.send(f"⚠️ Đã cài đặt kênh {channel.mention} làm kênh thông báo **NỢ XẤU (GIANG HỒ)**!")
+
+
+@settbnoxau.error
+async def settbnoxau_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Bạn cần có quyền **Quản lý máy chủ** để dùng lệnh này!")
+
+
+# --- LỆNH TẠO DANH MỤC & KÊNH ---
 @bot.command(name="taodanhmuc")
 @commands.has_permissions(manage_channels=True)
 async def taodanhmuc(ctx, *, ten_danhmuc: str):
@@ -275,13 +396,6 @@ async def taodanhmuc(ctx, *, ten_danhmuc: str):
         await ctx.send(f"❌ Không thể tạo danh mục: `{e}`")
 
 
-@taodanhmuc.error
-async def taodanhmuc_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Bạn cần có quyền **Quản lý kênh** để tạo danh mục!")
-
-
-# --- LỆNH TẠO KÊNH CHAT ĐƠN LẺ ---
 @bot.command(name="taokenh")
 @commands.has_permissions(manage_channels=True)
 async def taokenh(ctx, ten_kenh: str, *, ten_danhmuc: str = None):
@@ -301,15 +415,12 @@ async def taokenh(ctx, ten_kenh: str, *, ten_danhmuc: str = None):
         await ctx.send(f"❌ Không thể tạo kênh: `{e}`")
 
 
-# --- 🔥 LỆNH TẠO NHANH DANH MỤC & NHIỀU KÊNH (VÔ HẠN) 🔥 ---
 @bot.command(name="taonhanh")
 @commands.has_permissions(manage_channels=True)
 async def taonhanh(ctx, *, noi_dung: str):
-    # Phân tách Danh mục và Danh sách kênh bằng dấu |
     if "|" not in noi_dung:
         return await ctx.send(
-            "❌ Cú pháp chưa đúng! Bạn cần dùng dấu `|` để chia danh mục và kênh.\n"
-            "👉 **Ví dụ:** `.taonhanh Khu Giải Trí | chat-chung, taixiu, xidach, doanso`"
+            "❌ Cú pháp chưa đúng! Ví dụ: `.taonhanh Khu Giải Trí | chat-chung, taixiu, xidach`"
         )
 
     parts = noi_dung.split("|", 1)
@@ -319,13 +430,7 @@ async def taonhanh(ctx, *, noi_dung: str):
     if not ten_danhmuc or not danh_sach_kenh_str:
         return await ctx.send("❌ Vui lòng nhập đầy đủ tên danh mục và ít nhất 1 tên kênh!")
 
-    # Lấy danh sách từng kênh bằng dấu phẩy
     danh_sach_kenh = [k.strip() for k in danh_sach_kenh_str.split(",") if k.strip()]
-
-    if not danh_sach_kenh:
-        return await ctx.send("❌ Bạn chưa nhập tên kênh nào hợp lệ!")
-
-    # 1. Tìm hoặc Tạo Category mới
     target_category = discord.utils.get(ctx.guild.categories, name=ten_danhmuc)
     if not target_category:
         try:
@@ -333,7 +438,6 @@ async def taonhanh(ctx, *, noi_dung: str):
         except Exception as e:
             return await ctx.send(f"❌ Lỗi khi tạo danh mục: `{e}`")
 
-    # 2. Tạo hàng loạt kênh chat
     created_channels = []
     msg_status = await ctx.send(f"⏳ Đang tiến hành tạo {len(danh_sach_kenh)} kênh...")
 
@@ -341,7 +445,7 @@ async def taonhanh(ctx, *, noi_dung: str):
         try:
             ch = await ctx.guild.create_text_channel(name=kenh_name, category=target_category)
             created_channels.append(ch.mention)
-            await asyncio.sleep(0.5)  # Tránh dính Rate Limit của Discord API
+            await asyncio.sleep(0.5)
         except Exception as e:
             print(f"Lỗi tạo kênh {kenh_name}: {e}")
 
@@ -353,12 +457,6 @@ async def taonhanh(ctx, *, noi_dung: str):
             f"💬 **Kênh đã tạo ({len(created_channels)}):** {str_kenh_da_tao}"
         )
     )
-
-
-@taonhanh.error
-async def taonhanh_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Bạn cần có quyền **Quản lý kênh** để sử dụng lệnh này!")
 
 
 # ==========================================
@@ -398,11 +496,13 @@ async def fusion(ctx):
         name="💰 Quản Lý & Ngân Hàng",
         value=(
             "• `.vi` : Xem số xu trong ví.\n"
-            "• `.thongtin` : Xem hồ sơ cá nhân & khoản nợ.\n"
+            "• `.thongtin` : Xem hồ sơ cá nhân & các khoản nợ.\n"
             "• `.vay <xu>` : Vay tiền ngân hàng (Lãi 5%/ngày).\n"
-            "• `.trano <xu/all>` : Trả tiền nợ ngân hàng.\n"
+            "• `.trano <xu/all>` : Trả nợ ngân hàng.\n"
+            "• `.vaynoxau <xu>` : Vay nợ xấu giang hồ (Max 200,000 xu - Lãi 30%/h).\n"
+            "• `.tranoxau <xu/all>` : Trả nợ xấu giang hồ.\n"
             "• `.diemdanh` : Điểm danh nhận 500 xu/ngày.\n"
-            "• `.work` : Đi làm thuê kiếm xu.\n"
+            "• `.lamviec` : Đi làm thuê kiếm xu.\n"
             "• `.chuyentien @user <xu>` : Chuyển xu cho người khác.\n"
             "• `.top` : Bảng xếp hạng đại gia."
         ),
@@ -410,11 +510,12 @@ async def fusion(ctx):
     )
 
     embed.add_field(
-        name="⚙️ Quản Lý Server & Kênh (Admin)",
+        name="⚙️ Cài Đặt Thông Báo & Server (Admin)",
         value=(
+            "• `.settb vay | #kênh` : Cài kênh thông báo vay ngân hàng.\n"
+            "• `.settb trano | #kênh` : Cài kênh thông báo trả nợ ngân hàng.\n"
+            "• `.settbnoxau #kênh` : Cài kênh thông báo nợ xấu / giang hồ đòi nợ.\n"
             "• `.taonhanh <danh_mục> | <kênh1>, <kênh2>, ...` : Tạo danh mục & VÔ HẠN kênh.\n"
-            "• `.taodanhmuc <tên_danh_mục>` : Tạo Category mới.\n"
-            "• `.taokenh <tên_kênh> [tên_danh_mục]` : Tạo 1 kênh chat lẻ.\n"
             "• `.setupbot <#kênh_1> <#kênh_2>` : Giới hạn kênh cho bot hoạt động.\n"
             "• `.botchucnangkenh <tên_lệnh> <#kênh>` : Gán lệnh chỉ chạy ở 1 kênh."
         ),
@@ -424,14 +525,9 @@ async def fusion(ctx):
     embed.add_field(
         name="🎲 Minigame Casino & Giải Trí",
         value=(
-            "• `.taixiu <số_xu>` : Lắc Xúc Xắc Tài/Xỉu.\n"
-            "• `.xidach <cược>` : Chơi Xì Dách 21 điểm.\n"
-            "• `.baucua <cửa> <cược>` : Bầu Cua.\n"
-            "• `.nohu <cược>` : Quay hũ Slot Machine.\n"
-            "• `.doanso <cược>` : Đoán số từ 1-100.\n"
-            "• `.dovui` : Câu hỏi đố vui (dùng `.traloi <đáp án>`).\n"
-            "• `.tromtien @user` : Trộm tiền.\n"
-            "• `.boxing @user` | `.vqmm` | `.tungxu` | `.xemboi`"
+            "• `.taixiu <xu>` | `.xidach <cược>` | `.baucua <cược>`\n"
+            "• `.nohu <cược>` | `.doanso <cược>` | `.dovui`\n"
+            "• `.tromtien @user` | `.boxing @user` | `.vqmm` | `.tungxu`"
         ),
         inline=False,
     )
@@ -449,6 +545,7 @@ async def vi(ctx):
     await ctx.send(f"💰 {ctx.author.mention}, bạn đang có **{user_data['vi_tien']}** xu.")
 
 
+# --- VAY NGÂN HÀNG THƯỜNG ---
 @bot.command(name="vay")
 async def vay(ctx, so_tien: int):
     if so_tien <= 0:
@@ -459,7 +556,7 @@ async def vay(ctx, so_tien: int):
 
     if tien_no_hien_tai + so_tien > 50000:
         return await ctx.send(
-            f"❌ Hạn mức vay tối đa là **50,000 xu**! Hiện bạn đã nợ **{tien_no_hien_tai} xu**."
+            f"❌ Hạn mức vay ngân hàng tối đa là **50,000 xu**! Hiện bạn đã nợ **{tien_no_hien_tai} xu**."
         )
 
     cap_nhat_user_data(
@@ -476,14 +573,32 @@ async def vay(ctx, so_tien: int):
         f"⚠️ *Lưu ý: Tiền nợ sẽ chịu lãi suất **5%/ngày**.*"
     )
 
+    # 📢 TỰ ĐỘNG GỬI THÔNG BÁO VAY
+    config = lay_guild_config(ctx.guild.id)
+    tb_channel_id = config.get("tb_vay_channel")
+    if tb_channel_id:
+        tb_channel = ctx.guild.get_channel(tb_channel_id)
+        if tb_channel:
+            embed_tb = discord.Embed(
+                title="🏦 THÔNG BÁO VAY TIỀN NGÂN HÀNG",
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed_tb.add_field(name="Khách hàng", value=ctx.author.mention, inline=True)
+            embed_tb.add_field(name="Số tiền vay", value=f"**+{so_tien} xu**", inline=True)
+            embed_tb.add_field(name="Tổng dư nợ", value=f"**{tien_no_hien_tai + so_tien} xu**", inline=False)
+            embed_tb.set_footer(text=f"ID: {ctx.author.id}")
+            await tb_channel.send(embed=embed_tb)
 
+
+# --- TRẢ NỢ NGÂN HÀNG THƯỜNG ---
 @bot.command(name="trano")
 async def trano(ctx, so_tien: str):
     user_data = lay_user_data(ctx.author.id)
     tien_no = user_data.get("tien_no", 0)
 
     if tien_no <= 0:
-        return await ctx.send("🎉 Bạn không có khoản nợ nào cần trả!")
+        return await ctx.send("🎉 Bạn không có khoản nợ ngân hàng nào cần trả!")
 
     if so_tien.lower() == "all":
         tra = min(user_data["vi_tien"], tien_no)
@@ -512,8 +627,128 @@ async def trano(ctx, so_tien: str):
 
     await ctx.send(
         f"🏦 **NGÂN HÀNG FUSION:** {ctx.author.mention} đã trả **{tra} xu**!\n"
-        f"📌 Dư nợ còn lại: **{con_no} xu**."
+        f"📌 Dư nợ ngân hàng còn lại: **{con_no} xu**."
     )
+
+    # 📢 TỰ ĐỘNG GỬI THÔNG BÁO TRẢ NỢ
+    config = lay_guild_config(ctx.guild.id)
+    tb_channel_id = config.get("tb_trano_channel")
+    if tb_channel_id:
+        tb_channel = ctx.guild.get_channel(tb_channel_id)
+        if tb_channel:
+            embed_tb = discord.Embed(
+                title="💳 THÔNG BÁO TRẢ NỢ NGÂN HÀNG",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed_tb.add_field(name="Khách hàng", value=ctx.author.mention, inline=True)
+            embed_tb.add_field(name="Số tiền trả", value=f"**-{tra} xu**", inline=True)
+            embed_tb.add_field(name="Dư nợ còn lại", value=f"**{con_no} xu**", inline=False)
+            embed_tb.set_footer(text=f"ID: {ctx.author.id}")
+            await tb_channel.send(embed=embed_tb)
+
+
+# --- 🚨 VAY NỢ XẤU (LÃI 30%/GIỜ - MAX 200,000 XU) ---
+@bot.command(name="vaynoxau")
+async def vaynoxau(ctx, so_tien: int):
+    if so_tien <= 0:
+        return await ctx.send("❌ Số tiền vay phải lớn hơn 0!")
+
+    user_data = lay_user_data(ctx.author.id)
+    tien_no_xau = user_data.get("tien_no_xau", 0)
+
+    if tien_no_xau + so_tien > 200000:
+        return await ctx.send(
+            f"❌ Hạn mức vay NỢ XẤU tối đa là **200,000 xu**! Hiện bạn đã nợ **{tien_no_xau} xu**."
+        )
+
+    cap_nhat_user_data(
+        ctx.author.id,
+        {
+            "vi_tien": user_data["vi_tien"] + so_tien,
+            "tien_no_xau": tien_no_xau + so_tien,
+            "lan_tinh_lai_xau": time.time(),
+        },
+    )
+
+    await ctx.send(
+        f"⚠️ **GIANG HỒ CHO VAY NỢ XẤU:** {ctx.author.mention} đã nhận **{so_tien} xu**!\n"
+        f"🔥 *CẢNH BÁO: Lãi suất cực đắt **30%/1 tiếng**. Sau 2 tiếng chưa trả sẽ bị giang hồ chửi và truy tìm!*"
+    )
+
+    # 📢 THÔNG BÁO VAY NỢ XẤU
+    config = lay_guild_config(ctx.guild.id)
+    tb_noxau_id = config.get("tb_noxau_channel")
+    if tb_noxau_id:
+        tb_channel = ctx.guild.get_channel(tb_noxau_id)
+        if tb_channel:
+            embed_tb = discord.Embed(
+                title="🩸 THÔNG BÁO VAY NỢ XẤU (TÍN DỤNG ĐEN)",
+                color=discord.Color.dark_red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed_tb.add_field(name="Con nợ", value=ctx.author.mention, inline=True)
+            embed_tb.add_field(name="Số tiền vay", value=f"**+{so_tien} xu**", inline=True)
+            embed_tb.add_field(name="Tổng nợ xấu hiện tại", value=f"**{tien_no_xau + so_tien} xu**", inline=False)
+            embed_tb.set_footer(text="Hạn trả: 2 tiếng trước khi giang hồ tìm!")
+            await tb_channel.send(embed=embed_tb)
+
+
+# --- 🚨 TRẢ NỢ XẤU ---
+@bot.command(name="tranoxau")
+async def tranoxau(ctx, so_tien: str):
+    user_data = lay_user_data(ctx.author.id)
+    tien_no_xau = user_data.get("tien_no_xau", 0)
+
+    if tien_no_xau <= 0:
+        return await ctx.send("🎉 Bạn không có khoản nợ xấu giang hồ nào!")
+
+    if so_tien.lower() == "all":
+        tra = min(user_data["vi_tien"], tien_no_xau)
+    elif so_tien.isdigit():
+        tra = int(so_tien)
+    else:
+        return await ctx.send("❌ Cú pháp không hợp lệ! Dùng `.tranoxau <số_xu>` hoặc `.tranoxau all`.")
+
+    if tra <= 0:
+        return await ctx.send("❌ Số tiền trả phải lớn hơn 0!")
+    if user_data["vi_tien"] < tra:
+        return await ctx.send("❌ Bạn không đủ tiền trong ví để trả nợ xấu!")
+
+    con_no = tien_no_xau - tra
+    if con_no < 0:
+        tra = tien_no_xau
+        con_no = 0
+
+    cap_nhat_user_data(
+        ctx.author.id,
+        {
+            "vi_tien": user_data["vi_tien"] - tra,
+            "tien_no_xau": con_no,
+        },
+    )
+
+    await ctx.send(
+        f"🤝 **GIANG HỒ BÁO XÁC NHẬN:** {ctx.author.mention} đã trả **{tra} xu**!\n"
+        f"📌 Dư nợ xấu còn lại: **{con_no} xu**."
+    )
+
+    # 📢 THÔNG BÁO TRẢ NỢ XẤU
+    config = lay_guild_config(ctx.guild.id)
+    tb_noxau_id = config.get("tb_noxau_channel")
+    if tb_noxau_id:
+        tb_channel = ctx.guild.get_channel(tb_noxau_id)
+        if tb_channel:
+            embed_tb = discord.Embed(
+                title="🕊️ THÔNG BÁO TRẢ NỢ XẤU (GIANG HỒ)",
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed_tb.add_field(name="Người trả", value=ctx.author.mention, inline=True)
+            embed_tb.add_field(name="Số tiền trả", value=f"**-{tra} xu**", inline=True)
+            embed_tb.add_field(name="Nợ xấu còn lại", value=f"**{con_no} xu**", inline=False)
+            embed_tb.set_footer(text=f"ID: {ctx.author.id}")
+            await tb_channel.send(embed=embed_tb)
 
 
 @bot.command(name="thongtin")
@@ -531,6 +766,11 @@ async def thongtin(ctx):
     embed.add_field(
         name="🏦 Nợ ngân hàng",
         value=f"**{user_data.get('tien_no', 0)}** xu *(Lãi 5%/ngày)*",
+        inline=True,
+    )
+    embed.add_field(
+        name="🚨 Nợ xấu giang hồ",
+        value=f"**{user_data.get('tien_no_xau', 0)}** xu *(Lãi 30%/h)*",
         inline=True,
     )
 
@@ -596,8 +836,9 @@ async def diemdanh(ctx):
     )
 
 
-@bot.command(name="work")
-async def work(ctx):
+# --- LỆNH SỬA TÊN .work >> .lamviec ---
+@bot.command(name="lamviec")
+async def lamviec(ctx):
     user_id = ctx.author.id
     now = time.time()
     user_data = lay_user_data(user_id)
@@ -640,30 +881,38 @@ async def nohu(ctx, muc_cuoc: int = 100):
         return await ctx.send("❌ Bạn không đủ tiền!")
 
     icons = ["🎰", "🍇", "🍊", "🍋", "7️⃣", "💎"]
-    weights = [30, 25, 20, 15, 8, 2]
-    spin = random.choices(icons, weights=weights, k=3)
-
     cap_nhat_user_data(ctx.author.id, {"vi_tien": user_data["vi_tien"] - muc_cuoc})
 
     msg = await ctx.send("🎰 **SLOT MACHINE** 🎰\n| ❓ | ❓ | ❓ |\nĐang quay...")
     await asyncio.sleep(1.5)
 
-    if spin[0] == spin[1] == spin[2]:
-        he_so = 100 if spin[0] == "💎" else (50 if spin[0] == "7️⃣" else 10)
+    rate = random.random()
+
+    if rate < 0.05:
+        sym = random.choice(icons)
+        spin = [sym, sym, sym]
+        he_so = 100 if sym == "💎" else (50 if sym == "7️⃣" else 15)
         thuong = muc_cuoc * he_so
         cap_nhat_user_data(
             ctx.author.id,
             {"vi_tien": (lay_user_data(ctx.author.id)["vi_tien"] + thuong + muc_cuoc)},
         )
-        thiet_lap = f"🎉 **JACKPOT {spin[0]}!** Bạn thắng **+{thuong} xu** (x{he_so})!"
-    elif spin[0] == spin[1] or spin[1] == spin[2] or spin[0] == spin[2]:
-        thuong = int(muc_cuoc * 2)
+        thiet_lap = f"🎉 **JACKPOT {sym}!** Bạn thắng **+{thuong} xu** (x{he_so})!"
+
+    elif rate < 0.30:
+        sym = random.choice(icons)
+        other = random.choice([i for i in icons if i != sym])
+        spin = [sym, sym, other]
+        random.shuffle(spin)
+        thuong = int(muc_cuoc * 1.5)
         cap_nhat_user_data(
             ctx.author.id,
             {"vi_tien": (lay_user_data(ctx.author.id)["vi_tien"] + thuong + muc_cuoc)},
         )
-        thiet_lap = f"✨ **Trúng 2 ô trùng!** Bạn thắng **+{thuong} xu** (x2)!"
+        thiet_lap = f"✨ **Trúng 2 ô trùng!** Bạn thắng **+{thuong} xu**!"
+
     else:
+        spin = random.sample(icons, 3)
         thiet_lap = f"😭 Trượt rồi! Bạn mất **{muc_cuoc} xu**."
 
     await msg.edit(
@@ -671,50 +920,106 @@ async def nohu(ctx, muc_cuoc: int = 100):
     )
 
 
-# --- BẦU CUA ---
-@bot.command(name="baucua")
-async def baucua(ctx, cua_dat: str, muc_cuoc: int = 100):
-    ds_cua = {
-        "bau": "🍐 Bầu",
-        "cua": "🦀 Cua",
-        "tom": "🦐 Tôm",
-        "ca": "🐟 Cá",
-        "ga": "🐓 Gà",
-        "nai": "🦌 Nai",
-    }
-    cua_clean = cua_dat.lower()
-    if cua_clean not in ds_cua:
-        return await ctx.send("❌ Cửa cược không hợp lệ! Chọn: `bau`, `cua`, `tom`, `ca`, `ga`, `nai`.")
+# --- BẦU CUA (.baucua) ---
+class BauCuaView(View):
 
+    def __init__(self, ctx, muc_cuoc):
+        super().__init__(timeout=30.0)
+        self.ctx = ctx
+        self.muc_cuoc = muc_cuoc
+        self.ds_cua = {
+            "bau": "🍐 Bầu",
+            "cua": "🦀 Cua",
+            "tom": "🦐 Tôm",
+            "ca": "🐟 Cá",
+            "ga": "🐓 Gà",
+            "nai": "🦌 Nai",
+        }
+
+    async def lua_chon_cua(self, interaction: discord.Interaction, cua_clean: str):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message("❌ Đây không phải lượt chơi của bạn!", ephemeral=True)
+
+        user_data = lay_user_data(self.ctx.author.id)
+        if user_data["vi_tien"] < self.muc_cuoc:
+            return await interaction.response.send_message("❌ Bạn không đủ tiền!", ephemeral=True)
+
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+
+        cap_nhat_user_data(self.ctx.author.id, {"vi_tien": user_data["vi_tien"] - self.muc_cuoc})
+
+        cac_cua = list(self.ds_cua.keys())
+        kq1, kq2, kq3 = random.choice(cac_cua), random.choice(cac_cua), random.choice(cac_cua)
+        ket_qua = [kq1, kq2, kq3]
+
+        so_lan = ket_qua.count(cua_clean)
+        str_kq = f"{self.ds_cua[kq1]} | {self.ds_cua[kq2]} | {self.ds_cua[kq3]}"
+
+        if so_lan > 0:
+            tien_thuong = self.muc_cuoc * so_lan
+            tong_nhan = self.muc_cuoc + tien_thuong
+            cap_nhat_user_data(
+                self.ctx.author.id,
+                {"vi_tien": lay_user_data(self.ctx.author.id)["vi_tien"] + tong_nhan},
+            )
+            res_msg = (
+                f"🎲 **BẦU CUA TRÚNG LỚN!**\n"
+                f"🎯 Bạn đặt: **{self.ds_cua[cua_clean]}** ({self.muc_cuoc} xu)\n"
+                f"🎰 Kết quả: **{str_kq}**\n"
+                f"🎉 Cửa **{self.ds_cua[cua_clean]}** xuất hiện **{so_lan}** lần! Bạn nhận **+{tien_thuong} xu**!"
+            )
+        else:
+            res_msg = (
+                f"🎲 **BẦU CUA THUA CƯỢC!**\n"
+                f"🎯 Bạn đặt: **{self.ds_cua[cua_clean]}** ({self.muc_cuoc} xu)\n"
+                f"🎰 Kết quả: **{str_kq}**\n"
+                f"😭 Rất tiếc, không có cửa **{self.ds_cua[cua_clean]}**. Mất **{self.muc_cuoc} xu**!"
+            )
+
+        await interaction.response.edit_message(content=res_msg, view=self)
+
+    @discord.ui.button(label="Bầu", style=discord.ButtonStyle.secondary, emoji="🍐", row=0)
+    async def btn_bau(self, interaction: discord.Interaction, button: Button):
+        await self.lua_chon_cua(interaction, "bau")
+
+    @discord.ui.button(label="Cua", style=discord.ButtonStyle.secondary, emoji="🦀", row=0)
+    async def btn_cua(self, interaction: discord.Interaction, button: Button):
+        await self.lua_chon_cua(interaction, "cua")
+
+    @discord.ui.button(label="Tôm", style=discord.ButtonStyle.secondary, emoji="🦐", row=0)
+    async def btn_tom(self, interaction: discord.Interaction, button: Button):
+        await self.lua_chon_cua(interaction, "tom")
+
+    @discord.ui.button(label="Cá", style=discord.ButtonStyle.secondary, emoji="🐟", row=1)
+    async def btn_ca(self, interaction: discord.Interaction, button: Button):
+        await self.lua_chon_cua(interaction, "ca")
+
+    @discord.ui.button(label="Gà", style=discord.ButtonStyle.secondary, emoji="🐓", row=1)
+    async def btn_ga(self, interaction: discord.Interaction, button: Button):
+        await self.lua_chon_cua(interaction, "ga")
+
+    @discord.ui.button(label="Nai", style=discord.ButtonStyle.secondary, emoji="🦌", row=1)
+    async def btn_nai(self, interaction: discord.Interaction, button: Button):
+        await self.lua_chon_cua(interaction, "nai")
+
+
+@bot.command(name="baucua")
+async def baucua(ctx, muc_cuoc: int = 100):
     if muc_cuoc <= 0:
         return await ctx.send("❌ Mức cược phải lớn hơn 0!")
+
     user_data = lay_user_data(ctx.author.id)
     if user_data["vi_tien"] < muc_cuoc:
-        return await ctx.send("❌ Bạn không đủ tiền!")
+        return await ctx.send("❌ Bạn không đủ tiền trong ví!")
 
-    cap_nhat_user_data(ctx.author.id, {"vi_tien": user_data["vi_tien"] - muc_cuoc})
-
-    cac_cua = list(ds_cua.keys())
-    kq1, kq2, kq3 = random.choice(cac_cua), random.choice(cac_cua), random.choice(cac_cua)
-    ket_qua = [kq1, kq2, kq3]
-
-    so_lan = ket_qua.count(cua_clean)
-    str_kq = f"{ds_cua[kq1]} | {ds_cua[kq2]} | {ds_cua[kq3]}"
-
-    if so_lan > 0:
-        tien_thuong = muc_cuoc * so_lan
-        tong_nhan = muc_cuoc + tien_thuong
-        cap_nhat_user_data(
-            ctx.author.id,
-            {"vi_tien": lay_user_data(ctx.author.id)["vi_tien"] + tong_nhan},
-        )
-        await ctx.send(
-            f"🎲 **BẦU CUA TRÚNG LỚN!**\nKết quả: **{str_kq}**\n🎉 Cửa **{ds_cua[cua_clean]}** xuất hiện **{so_lan}** lần! Bạn nhận **+{tien_thuong} xu**!"
-        )
-    else:
-        await ctx.send(
-            f"🎲 **BẦU CUA BANH TA TAO!**\nKết quả: **{str_kq}**\n😭 Rất tiếc, không có cửa **{ds_cua[cua_clean]}**. Mất **{muc_cuoc} xu**!"
-        )
+    view = BauCuaView(ctx, muc_cuoc)
+    await ctx.send(
+        f"🎲 **BẦU CUA TÔM CÁ** (Mức cược: **{muc_cuoc} xu**)\n"
+        f"👉 {ctx.author.mention}, hãy chọn 1 cửa đặt cược bên dưới trong **30 giây**:",
+        view=view,
+    )
 
 
 # --- XÌ DÁCH (.xidach) ---
