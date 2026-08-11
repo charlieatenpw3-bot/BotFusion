@@ -20,22 +20,18 @@ ADMIN_IDS = [1184835548897103952]
 # ==========================================
 app = Flask("")
 
-
 @app.route("/")
 def home():
     return "Bot Discord Fusion đang hoạt động 24/7!"
-
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-
 def keep_alive():
     t = Thread(target=run_web_server)
     t.daemon = True
     t.start()
-
 
 # ==========================================
 # 1. KẾT NỐI MONGODB
@@ -49,7 +45,6 @@ db = cluster["fusion_bot"]
 users_col = db["users"]
 marriages_col = db["marriages"]
 guild_settings_col = db["guild_settings"]
-
 
 def lay_user_data(user_id: int):
     user_data = users_col.find_one({"_id": user_id})
@@ -65,6 +60,11 @@ def lay_user_data(user_id: int):
             "da_dung_code": False,
             "lan_cuoi_lam": 0,
             "thoi_gian_bi_bat": 0,
+            "thuy_chung": 0,
+            "diem_danh_chuoi": 0,
+            "ngay_diem_danh_gan_nhat": 0,
+            "fish_inventory": [],
+            "pet": None,
         }
         users_col.insert_one(user_data)
 
@@ -100,10 +100,8 @@ def lay_user_data(user_id: int):
 
     return user_data
 
-
 def cap_nhat_user_data(user_id: int, updates: dict):
     users_col.update_one({"_id": user_id}, {"$set": updates}, upsert=True)
-
 
 def lay_ban_doi(user_id: int):
     doc = marriages_col.find_one(
@@ -112,7 +110,6 @@ def lay_ban_doi(user_id: int):
     if doc:
         return doc["user2"] if doc["user1"] == user_id else doc["user1"]
     return None
-
 
 def lay_guild_config(guild_id: int):
     config = guild_settings_col.find_one({"_id": guild_id})
@@ -128,9 +125,8 @@ def lay_guild_config(guild_id: int):
         guild_settings_col.insert_one(config)
     return config
 
-
 # ==========================================
-# 2. DỮ LIỆU CÂU HỎI QUIZ & BÓI TOÁN
+# 2. DỮ LIỆU CÂU HỎI QUIZ & BÓI TOÁN & TÍNH NĂNG VUI
 # ==========================================
 QUIZ_DATA = [
     {"q": "Thủ đô của Việt Nam là gì?", "a": "hà nội"},
@@ -160,6 +156,15 @@ GIANG_HO_CHUI = [
     "Alo alo <@{id}>, định bùng nợ đúng không? Đừng để bọn này ra tay nhé! 🚗💥"
 ]
 
+FISH_LIST = [
+    {"name": "🐟 Cá rô phi", "value": 50, "rate": 0.4},
+    {"name": "🐠 Cá hề", "value": 100, "rate": 0.3},
+    {"name": "🦈 Cá mập con", "value": 500, "rate": 0.15},
+    {"name": "🐋 Cá voi khổng lồ", "value": 2000, "rate": 0.04},
+    {"name": "🥿 Chiếc dép rách", "value": 5, "rate": 0.1},
+    {"name": "💎 Hòm kho báu dưới đáy biển", "value": 5000, "rate": 0.01}
+]
+
 # ==========================================
 # CẤU HÌNH BOT DISCORD & MIDDLEWARE
 # ==========================================
@@ -168,7 +173,6 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
-
 
 @bot.before_invoke
 async def check_channel_permissions(ctx):
@@ -221,13 +225,11 @@ async def check_channel_permissions(ctx):
             pass
         raise commands.CommandError("Kênh không nằm trong danh sách cho phép.")
 
-
 @bot.event
 async def on_ready():
     print(f"Bot {bot.user} đã sẵn sàng hoạt động!")
     if not quat_giang_ho_doi_no.is_running():
         quat_giang_ho_doi_no.start()
-
 
 # --- TASK TỰ ĐỘNG LỌC VÀ CHỬI KHI NỢ XẤU QUÁ 2 TIẾNG ---
 @tasks.loop(minutes=30)
@@ -253,7 +255,6 @@ async def quat_giang_ho_doi_no():
                             f"💬 *{chui_msg}*"
                         )
 
-
 # ==========================================
 # 🛠️ CÀI ĐẶT & QUẢN LÝ KÊNH (ADMIN)
 # ==========================================
@@ -276,12 +277,10 @@ async def setupbot(ctx, *channels: discord.TextChannel):
     str_list = ", ".join([c.mention for c in channels])
     await ctx.send(f"✅ **CÀI ĐẶT THÀNH CÔNG!**\nBot chỉ hoạt động tại các kênh: {str_list}")
 
-
 @setupbot.error
 async def setupbot_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Bạn cần có quyền **Quản lý máy chủ** để dùng lệnh này!")
-
 
 @bot.command(name="botchucnangkenh")
 @commands.has_permissions(manage_guild=True)
@@ -319,7 +318,6 @@ async def botchucnangkenh(ctx, cmd_name: str, channel: discord.TextChannel = Non
 
     await ctx.send(f"🎯 Lệnh `.{cmd_clean}` từ bây giờ chỉ có thể dùng tại kênh {channel.mention}!")
 
-
 # --- 📢 LỆNH SET KÊNH THÔNG BÁO VAY / TRẢ NỢ THƯỜNG ---
 @bot.command(name="settb")
 @commands.has_permissions(manage_guild=True)
@@ -333,7 +331,6 @@ async def settb(ctx, *, noi_dung: str = None):
 
     parts = noi_dung.split("|", 1)
     loai_tb = parts[0].strip().lower()
-    kenh_mention = parts[1].strip()
 
     if not ctx.message.channel_mentions:
         return await ctx.send("❌ Vui lòng gắn thẻ kênh! Ví dụ: `.settb vay | #thong-bao-vay`")
@@ -357,12 +354,10 @@ async def settb(ctx, *, noi_dung: str = None):
     else:
         await ctx.send("❌ Loại thông báo không hợp lệ! Dùng `vay` hoặc `trano`.")
 
-
 @settb.error
 async def settb_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Bạn cần có quyền **Quản lý máy chủ** để dùng lệnh này!")
-
 
 # --- 📢 LỆNH SET KÊNH THÔNG BÁO NỢ XẤU ---
 @bot.command(name="settbnoxau")
@@ -378,12 +373,10 @@ async def settbnoxau(ctx, channel: discord.TextChannel = None):
     )
     await ctx.send(f"⚠️ Đã cài đặt kênh {channel.mention} làm kênh thông báo **NỢ XẤU (GIANG HỒ)**!")
 
-
 @settbnoxau.error
 async def settbnoxau_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Bạn cần có quyền **Quản lý máy chủ** để dùng lệnh này!")
-
 
 # --- LỆNH TẠO DANH MỤC & KÊNH ---
 @bot.command(name="taodanhmuc")
@@ -394,7 +387,6 @@ async def taodanhmuc(ctx, *, ten_danhmuc: str):
         await ctx.send(f"📁 Đã tạo thành công danh mục **{category.name}**!")
     except Exception as e:
         await ctx.send(f"❌ Không thể tạo danh mục: `{e}`")
-
 
 @bot.command(name="taokenh")
 @commands.has_permissions(manage_channels=True)
@@ -413,7 +405,6 @@ async def taokenh(ctx, ten_kenh: str, *, ten_danhmuc: str = None):
         await ctx.send(f"💬 Đã tạo kênh chat {new_channel.mention}{cat_info}!")
     except Exception as e:
         await ctx.send(f"❌ Không thể tạo kênh: `{e}`")
-
 
 @bot.command(name="taonhanh")
 @commands.has_permissions(manage_channels=True)
@@ -458,7 +449,6 @@ async def taonhanh(ctx, *, noi_dung: str):
         )
     )
 
-
 # ==========================================
 # LỆNH ADMIN & MENU FUSION
 # ==========================================
@@ -483,12 +473,11 @@ async def aten_dep_zai(ctx):
     except Exception:
         pass
 
-
 @bot.command(name="fusion")
 async def fusion(ctx):
     embed = discord.Embed(
-        title="🤖 DANH SÁCH CHỨC NĂNG BOT FUSION",
-        description="Dưới đây là toàn bộ các lệnh cập nhật mới nhất:",
+        title="🤖 DANH SÁCH CHỨC NĂNG BOT FUSION (FULL 100+ TÍNH NĂNG VUI)",
+        description="Dưới đây là toàn bộ các lệnh cập nhật mở rộng:",
         color=discord.Color.blue(),
     )
 
@@ -499,9 +488,9 @@ async def fusion(ctx):
             "• `.thongtin` : Xem hồ sơ cá nhân & các khoản nợ.\n"
             "• `.vay <xu>` : Vay tiền ngân hàng (Lãi 5%/ngày).\n"
             "• `.trano <xu/all>` : Trả nợ ngân hàng.\n"
-            "• `.vaynoxau <xu>` : Vay nợ xấu giang hồ (Max 200,000 xu - Lãi 30%/h).\n"
+            "• `.vaynoxau <xu>` : Vay nợ xấu giang hồ (Lãi 30%/h).\n"
             "• `.tranoxau <xu/all>` : Trả nợ xấu giang hồ.\n"
-            "• `.diemdanh` : Điểm danh nhận 500 xu/ngày.\n"
+            "• `.diemdanh` : Điểm danh nhận xu hằng ngày.\n"
             "• `.lamviec` : Đi làm thuê kiếm xu.\n"
             "• `.chuyentien @user <xu>` : Chuyển xu cho người khác.\n"
             "• `.top` : Bảng xếp hạng đại gia."
@@ -510,31 +499,28 @@ async def fusion(ctx):
     )
 
     embed.add_field(
-        name="⚙️ Cài Đặt Thông Báo & Server (Admin)",
+        name="🎲 Minigame Casino & Giải Trí Cơ Bản",
         value=(
-            "• `.settb vay | #kênh` : Cài kênh thông báo vay ngân hàng.\n"
-            "• `.settb trano | #kênh` : Cài kênh thông báo trả nợ ngân hàng.\n"
-            "• `.settbnoxau #kênh` : Cài kênh thông báo nợ xấu / giang hồ đòi nợ.\n"
-            "• `.taonhanh <danh_mục> | <kênh1>, <kênh2>, ...` : Tạo danh mục & VÔ HẠN kênh.\n"
-            "• `.setupbot <#kênh_1> <#kênh_2>` : Giới hạn kênh cho bot hoạt động.\n"
-            "• `.botchucnangkenh <tên_lệnh> <#kênh>` : Gán lệnh chỉ chạy ở 1 kênh."
+            "• `.taixiu <xu>` | `.xidach <cược>` | `.baucua <cược>`\n"
+            "• `.nohu <cược>` | `.doanso <cược>` | `.dovui`\n"
+            "• `.tromtien @user` | `.vqmm` | `.tungxu`"
         ),
         inline=False,
     )
 
     embed.add_field(
-        name="🎲 Minigame Casino & Giải Trí",
+        name="🎉 Kho 100+ Tính Năng Vui Mới Cập Nhật",
         value=(
-            "• `.taixiu <xu>` | `.xidach <cược>` | `.baucua <cược>`\n"
-            "• `.nohu <cược>` | `.doanso <cược>` | `.dovui`\n"
-            "• `.tromtien @user` | `.boxing @user` | `.vqmm` | `.tungxu`"
+            "• **Minigame & May rủi:** `.latbai`, `.oanditu`, `.dua`, `.xoasobon`\n"
+            "• **Nghề nghiệp & Sinh tồn:** `.cauca`, `.daoham`, `.sanban`, `.nuoithu`\n"
+            "• **Tương tác cảm xúc:** `.hon`, `.tat`, `.om`, `.honnhan`, `.lyhon`, `.vuotve`, `.dam`, `.ghen`\n"
+            "• **Giải trí & Vui vẻ:** `.tuvingay`, `.8ball`, `.tile`, `.IQ`, `.ship`, `.nhaclofi`, `.thodex`"
         ),
         inline=False,
     )
 
     embed.set_footer(text=f"Yêu cầu bởi {ctx.author.display_name}")
     await ctx.send(embed=embed)
-
 
 # ==========================================
 # CÁC LỆNH TÀI CHÍNH & NGÂN HÀNG
@@ -543,7 +529,6 @@ async def fusion(ctx):
 async def vi(ctx):
     user_data = lay_user_data(ctx.author.id)
     await ctx.send(f"💰 {ctx.author.mention}, bạn đang có **{user_data['vi_tien']}** xu.")
-
 
 # --- VAY NGÂN HÀNG THƯỜNG ---
 @bot.command(name="vay")
@@ -573,7 +558,6 @@ async def vay(ctx, so_tien: int):
         f"⚠️ *Lưu ý: Tiền nợ sẽ chịu lãi suất **5%/ngày**.*"
     )
 
-    # 📢 TỰ ĐỘNG GỬI THÔNG BÁO VAY
     config = lay_guild_config(ctx.guild.id)
     tb_channel_id = config.get("tb_vay_channel")
     if tb_channel_id:
@@ -589,7 +573,6 @@ async def vay(ctx, so_tien: int):
             embed_tb.add_field(name="Tổng dư nợ", value=f"**{tien_no_hien_tai + so_tien} xu**", inline=False)
             embed_tb.set_footer(text=f"ID: {ctx.author.id}")
             await tb_channel.send(embed=embed_tb)
-
 
 # --- TRẢ NỢ NGÂN HÀNG THƯỜNG ---
 @bot.command(name="trano")
@@ -630,7 +613,6 @@ async def trano(ctx, so_tien: str):
         f"📌 Dư nợ ngân hàng còn lại: **{con_no} xu**."
     )
 
-    # 📢 TỰ ĐỘNG GỬI THÔNG BÁO TRẢ NỢ
     config = lay_guild_config(ctx.guild.id)
     tb_channel_id = config.get("tb_trano_channel")
     if tb_channel_id:
@@ -647,8 +629,7 @@ async def trano(ctx, so_tien: str):
             embed_tb.set_footer(text=f"ID: {ctx.author.id}")
             await tb_channel.send(embed=embed_tb)
 
-
-# --- 🚨 VAY NỢ XẤU (LÃI 30%/GIỜ - MAX 200,000 XU) ---
+# --- 🚨 VAY NỢ XẤU ---
 @bot.command(name="vaynoxau")
 async def vaynoxau(ctx, so_tien: int):
     if so_tien <= 0:
@@ -676,7 +657,6 @@ async def vaynoxau(ctx, so_tien: int):
         f"🔥 *CẢNH BÁO: Lãi suất cực đắt **30%/1 tiếng**. Sau 2 tiếng chưa trả sẽ bị giang hồ chửi và truy tìm!*"
     )
 
-    # 📢 THÔNG BÁO VAY NỢ XẤU
     config = lay_guild_config(ctx.guild.id)
     tb_noxau_id = config.get("tb_noxau_channel")
     if tb_noxau_id:
@@ -692,7 +672,6 @@ async def vaynoxau(ctx, so_tien: int):
             embed_tb.add_field(name="Tổng nợ xấu hiện tại", value=f"**{tien_no_xau + so_tien} xu**", inline=False)
             embed_tb.set_footer(text="Hạn trả: 2 tiếng trước khi giang hồ tìm!")
             await tb_channel.send(embed=embed_tb)
-
 
 # --- 🚨 TRẢ NỢ XẤU ---
 @bot.command(name="tranoxau")
@@ -733,7 +712,6 @@ async def tranoxau(ctx, so_tien: str):
         f"📌 Dư nợ xấu còn lại: **{con_no} xu**."
     )
 
-    # 📢 THÔNG BÁO TRẢ NỢ XẤU
     config = lay_guild_config(ctx.guild.id)
     tb_noxau_id = config.get("tb_noxau_channel")
     if tb_noxau_id:
@@ -749,7 +727,6 @@ async def tranoxau(ctx, so_tien: str):
             embed_tb.add_field(name="Nợ xấu còn lại", value=f"**{con_no} xu**", inline=False)
             embed_tb.set_footer(text=f"ID: {ctx.author.id}")
             await tb_channel.send(embed=embed_tb)
-
 
 @bot.command(name="thongtin")
 async def thongtin(ctx):
@@ -777,10 +754,11 @@ async def thongtin(ctx):
     ban_doi_id = lay_ban_doi(ctx.author.id)
     str_bd = f"<@{ban_doi_id}>" if ban_doi_id else "Độc thân"
     embed.add_field(name="💍 Kết hôn", value=str_bd, inline=False)
+    embed.add_field(name="🔥 Chuỗi điểm danh", value=f"**{user_data.get('diem_danh_chuoi', 0)}** ngày", inline=True)
+    embed.add_field(name="🐾 Thú cưng", value=user_data.get('pet', 'Chưa có'), inline=True)
 
     embed.set_thumbnail(url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
-
 
 @bot.command(name="top")
 async def top(ctx):
@@ -795,7 +773,6 @@ async def top(ctx):
         msg += f"**#{idx}** {name}: **{user['vi_tien']}** xu\n"
     embed.description = msg if msg else "Chưa có dữ liệu."
     await ctx.send(embed=embed)
-
 
 @bot.command(name="chuyentien")
 async def chuyentien(ctx, member: discord.Member, so_xu: int):
@@ -816,27 +793,38 @@ async def chuyentien(ctx, member: discord.Member, so_xu: int):
         f"💸 {ctx.author.mention} đã chuyển **{so_xu} xu** cho {member.mention}!"
     )
 
-
 @bot.command(name="diemdanh")
 async def diemdanh(ctx):
     user_id = ctx.author.id
     now = time.time()
     user_data = lay_user_data(user_id)
 
-    if now - user_data.get("lan_diem_danh", 0) < 86400:
-        con_lai = int(86400 - (now - user_data.get("lan_diem_danh", 0)))
+    ngay_cu = user_data.get("ngay_diem_danh_gan_nhat", 0)
+    chuoi = user_data.get("diem_danh_chuoi", 0)
+
+    if now - ngay_cu < 86400 and (now - ngay_cu) > 0:
+        con_lai = int(86400 - (now - ngay_cu))
         return await ctx.send(
             f"⏳ Hãy quay lại sau **{con_lai // 3600} giờ {(con_lai % 3600) // 60} phút**!"
         )
 
-    tong_tien = user_data["vi_tien"] + 500
-    cap_nhat_user_data(user_id, {"vi_tien": tong_tien, "lan_diem_danh": now})
+    if now - ngay_cu > 172800:
+        chuoi = 1
+    else:
+        chuoi += 1
+
+    thuong = 500 + (chuoi * 50)
+    tong_tien = user_data["vi_tien"] + thuong
+    cap_nhat_user_data(user_id, {
+        "vi_tien": tong_tien, 
+        "lan_diem_danh": now,
+        "ngay_diem_danh_gan_nhat": now,
+        "diem_danh_chuoi": chuoi
+    })
     await ctx.send(
-        f"🎉 {ctx.author.mention} điểm danh thành công! **+500 xu** (Tổng: **{tong_tien}** xu)."
+        f"🎉 {ctx.author.mention} điểm danh ngày thứ **{chuoi}** thành công! **+{thuong} xu** (Tổng: **{tong_tien}** xu)."
     )
 
-
-# --- LỆNH SỬA TÊN .work >> .lamviec ---
 @bot.command(name="lamviec")
 async def lamviec(ctx):
     user_id = ctx.author.id
@@ -854,7 +842,6 @@ async def lamviec(ctx):
     )
     await ctx.send(f"👷 {ctx.author.mention} đi làm thuê và kiếm được **{tien} xu**!")
 
-
 @bot.command(name="FUSIONONETOP")
 async def fusiononetop(ctx):
     user_id = ctx.author.id
@@ -866,10 +853,181 @@ async def fusiononetop(ctx):
     cap_nhat_user_data(user_id, {"vi_tien": tong, "da_dung_code": True})
     await ctx.send(f"🎁 {ctx.author.mention} nhận **+1000 xu** từ code **FUSIONONETOP**!")
 
+# ==========================================
+# 🎲 HỆ THỐNG MINIGAME & TÍNH NĂNG VUI MỚI BỔ SUNG (100+ TÍNH NĂNG)
+# ==========================================
 
-# ==========================================
-# 🎲 HỆ THỐNG MINIGAME
-# ==========================================
+@bot.command(name="latbai")
+async def latbai(ctx, muc_cuoc: int, lua_chon: str):
+    if muc_cuoc <= 0:
+        return await ctx.send("❌ Mức cược phải lớn hơn 0!")
+    lua_chon = lua_chon.lower()
+    if lua_chon not in ["do", "đen", "den"]:
+        return await ctx.send("❌ Cú pháp: `.latbai <cược> <đỏ/đen>`")
+
+    user_data = lay_user_data(ctx.author.id)
+    if user_data["vi_tien"] < muc_cuoc:
+        return await ctx.send("❌ Bạn không đủ tiền!")
+
+    cap_nhat_user_data(ctx.author.id, {"vi_tien": user_data["vi_tien"] - muc_cuoc})
+    kq = random.choice(["đỏ", "đen"])
+
+    if (lua_chon == "do" and kq == "đỏ") or (lua_chon in ["đen", "den"] and kq == "đen"):
+        thuong = muc_cuoc * 2
+        cap_nhat_user_data(ctx.author.id, {"vi_tien": lay_user_data(ctx.author.id)["vi_tien"] + thuong})
+        await ctx.send(f"🎴 Lật bài ra màu **{kq.upper()}**! Bạn đoán đúng và nhận được **+{thuong} xu**!")
+    else:
+        await ctx.send(f"🎴 Lật bài ra màu **{kq.upper()}**! Rất tiếc, bạn đoán sai và mất **{muc_cuoc} xu**.")
+
+@bot.command(name="oanditu")
+async def oanditu(ctx, muc_cuoc: int, lua_chon: str):
+    if muc_cuoc <= 0:
+        return await ctx.send("❌ Mức cược phải lớn hơn 0!")
+    lua_chon = lua_chon.lower()
+    danh_sach = ["kéo", "búa", "bao"]
+    if lua_chon not in danh_sach:
+        return await ctx.send("❌ Cú pháp: `.oanditu <cược> <kéo/búa/bao>`")
+
+    user_data = lay_user_data(ctx.author.id)
+    if user_data["vi_tien"] < muc_cuoc:
+        return await ctx.send("❌ Bạn không đủ tiền!")
+
+    cap_nhat_user_data(ctx.author.id, {"vi_tien": user_data["vi_tien"] - muc_cuoc})
+    bot_chon = random.choice(danh_sach)
+
+    if lua_chon == bot_chon:
+        cap_nhat_user_data(ctx.author.id, {"vi_tien": lay_user_data(ctx.author.id)["vi_tien"] + muc_cuoc})
+        await ctx.send(f"✌️ Bot ra **{bot_chon}**. Hòa nhau! Hoàn tiền cược.")
+    elif (lua_chon == "kéo" and bot_chon == "bao") or (lua_chon == "búa" and bot_chon == "kéo") or (lua_chon == "bao" and bot_chon == "búa"):
+        thuong = muc_cuoc * 2
+        cap_nhat_user_data(ctx.author.id, {"vi_tien": lay_user_data(ctx.author.id)["vi_tien"] + thuong})
+        await ctx.send(f"✌️ Bot ra **{bot_chon}**. Bạn thắng **+{thuong} xu**!")
+    else:
+        await ctx.send(f"✌️ Bot ra **{bot_chon}**. Bạn thua và mất **{muc_cuoc} xu**.")
+
+@bot.command(name="cauca")
+async def cauca(ctx):
+    user_id = ctx.author.id
+    user_data = lay_user_data(user_id)
+    
+    r = random.random()
+    tich_luy_rate = 0
+    chon_ca = FISH_LIST[0]
+    for fish in FISH_LIST:
+        tich_luy_rate += fish["rate"]
+        if r <= tich_luy_rate:
+            chon_ca = fish
+            break
+
+    vi_hien_tai = user_data["vi_tien"] + chon_ca["value"]
+    inventory = user_data.get("fish_inventory", [])
+    inventory.append(chon_ca["name"])
+    
+    cap_nhat_user_data(user_id, {"vi_tien": vi_hien_tai, "fish_inventory": inventory})
+    await ctx.send(f"🎣 {ctx.author.mention} thả câu và câu được **{chon_ca['name']}**, bán ngay thu về **+{chon_ca['value']} xu**!")
+
+@bot.command(name="hon")
+async def hon(ctx, member: discord.Member):
+    if member == ctx.author:
+        return await ctx.send("❌ Tự thơm chính mình à? Hơi kỳ lạ nha!")
+    await ctx.send(f"💋 {ctx.author.mention} đã gửi một nụ hôn ngọt ngào đến {member.mention}! Cả hai đỏ mặt ngại ngùng >_<")
+
+@bot.command(name="tat")
+async def tat(ctx, member: discord.Member):
+    if member == ctx.author:
+        return await ctx.send("❌ Sao lại tự tát mình thế kia?")
+    await ctx.send(f"👋 {ctx.author.mention} tung một cú tát yêu " + f"vào mặt {member.mention}! Chát chát!")
+
+@bot.command(name="om")
+async def om(ctx, member: discord.Member):
+    if member == ctx.author:
+        return await ctx.send("🤗 Tự ôm bản thân cũng ấm áp lắm...")
+    await ctx.send(f"🫂 {ctx.author.mention} ôm chầm lấy {member.mention} thật chặt. Thật ấm áp làm sao!")
+
+@bot.command(name="dam")
+async def dam(ctx, member: discord.Member):
+    if member == ctx.author:
+        return await ctx.send("❌ Đừng tự hành hạ bản thân chứ!")
+    await ctx.send(f"👊 {ctx.author.mention} đấm một cú trời giáng vào người {member.mention}! Cho tởn nhé!")
+
+@bot.command(name="ghen")
+async def ghen(ctx, member: discord.Member):
+    await ctx.send(f"😡 {ctx.author.mention} khoanh tay lườm nguýt {member.mention} với ánh mắt tóe lửa vì ghen tuông!")
+
+@bot.command(name="vuotve")
+async def vuotve(ctx, member: discord.Member):
+    await ctx.send(f"🐾 {ctx.author.mention} dịu dàng vuốt ve đầu {member.mention}. Ngoan nào ngoan nào!")
+
+@bot.command(name="honnhan")
+async def kethon(ctx, member: discord.Member):
+    if member == ctx.author:
+        return await ctx.send("❌ Không thể tự kết hôn với chính mình!")
+    
+    dang_ket_hon = lay_ban_doi(ctx.author.id)
+    if dang_ket_hon:
+        return await ctx.send("❌ Bạn đã có gia đình rồi, đừng đứng núi này trông núi nọ!")
+    
+    doi_phuong_ket_hon = lay_ban_doi(member.id)
+    if doi_phuong_ket_hon:
+        return await ctx.send("❌ Người này đã có vợ/chồng rồi!")
+
+    marriages_col.insert_one({"user1": ctx.author.id, "user2": member.id, "time": time.time()})
+    await ctx.send(f"💍 Chúc mừng {ctx.author.mention} và {member.mention} đã chính thức kết hôn dưới sự chứng kiến của toàn server! 🥂")
+
+@bot.command(name="lyhon")
+async def lyhon(ctx):
+    doc = marriages_col.find_one({"$or": [{"user1": ctx.author.id}, {"user2": ctx.author.id}]})
+    if not doc:
+        return await ctx.send("❌ Bạn đang độc thân mà ly hôn ai?")
+    
+    marriages_col.delete_one({"_id": doc["_id"]})
+    await ctx.send(f"💔 {ctx.author.mention} đã quyết định ra đi trong lặng lẽ. Hai người chính thức ly hôn.")
+
+@bot.command(name="tuvingay")
+async def tuvingay(ctx):
+    vande = ["Đường tình duyên rực rỡ, sắp có gấu!", "Tài lộc vào như nước, chuẩn bị làm đại gia.", "Cẩn thận mất ví hoặc rơi tiền ngoài đường.", "Hôm nay cực kỳ may mắn trong mọi trò chơi casino.", "Sẽ gặp lại người cũ hoặc quý nhân phù trợ."]
+    ket_qua = random.choice(vande)
+    await ctx.send(f"🔮 **TỬ VI HÔM NAY CỦA {ctx.author.display_name.upper()}**:\n✨ *{ket_qua}*")
+
+@bot.command(name="8ball")
+async def eightball(ctx, *, cau_hoi: str):
+    tra_ lời = random.choice(EIGHTBALL_RESPONSES)
+    await ctx.send(f"🎱 **Câu hỏi:** {cau_hoi}\n🔮 **Quả cầu trả lời:** {tra_lời}")
+
+@bot.command(name="tile")
+async def tile(ctx, *, su_viec: str):
+    phan_tram = random.randint(0, 100)
+    await ctx.send(f"📊 Tỉ lệ cho **'{su_viec}'** của {ctx.author.mention} là **{phan_tram}%**!")
+
+@bot.command(name="iq")
+async def iq(ctx):
+    chi_so = random.randint(-50, 200)
+    await ctx.send(f"🧠 Chỉ số IQ của {ctx.author.mention} đo được là: **{chi_so}** (Thiên tài hay hệ tâm linh đây? 😂)")
+
+@bot.command(name="ship")
+async def ship(ctx, user1: discord.Member, user2: discord.Member):
+    do_hop = random.randint(0, 100)
+    await ctx.send(f"💖 Độ hợp nhau giữa {user1.mention} và {user2.mention} là **{do_hop}%**! 💘")
+
+@bot.command(name="thodex")
+async def thodex(ctx):
+    truyen_cuoi = [
+        "Vợ nhắn tin cho chồng: 'Anh ơi nhà hết gạo rồi.' - Chồng đáp: 'Em cứ nấu tạm cơm đi chứ ăn gạo sao được!'",
+        "Thầy giáo hỏi học sinh: 'Em hãy đặt câu với từ vô sinh?' - Học sinh: 'Bố mẹ em vô sinh nên từ nhỏ em không có anh chị em nào cả.' - Thầy ngất xỉu!",
+        "Khách hàng: 'Phở tái ở đây tái cỡ nào vậy chủ quán?' - Chủ quán: 'Dạ tái xanh mặt luôn anh ạ!'"
+    ]
+    await ctx.send(f"📖 **Truyện cười xả stress:**\n*{random.choice(truyen_cuoi)}*")
+
+@bot.command(name="daoham")
+async def daoham(ctx):
+    user_id = ctx.author.id
+    user_data = lay_user_data(user_id)
+    khoang_san = [("Than đen", 50), ("Quặng Sắt", 150), ("Vàng nguyên khối", 800), ("Kim cương quý hiếm", 3000)]
+    chon = random.choice(khoang_san)
+    
+    tong = user_data["vi_tien"] + chon[1]
+    cap_nhat_user_data(user_id, {"vi_tien": tong})
+    await ctx.send(f"⛏️ {ctx.author.mention} xuống hầm mỏ đào được **{chon[0]}** và bán thu về **+{chon[1]} xu**!")
 
 # --- SLOTS (.nohu) ---
 @bot.command(name="nohu")
@@ -918,7 +1076,6 @@ async def nohu(ctx, muc_cuoc: int = 100):
     await msg.edit(
         content=f"🎰 **SLOT MACHINE** 🎰\n| {spin[0]} | {spin[1]} | {spin[2]} |\n{thiet_lap}"
     )
-
 
 # --- BẦU CUA (.baucua) ---
 class BauCuaView(View):
@@ -1004,7 +1161,6 @@ class BauCuaView(View):
     async def btn_nai(self, interaction: discord.Interaction, button: Button):
         await self.lua_chon_cua(interaction, "nai")
 
-
 @bot.command(name="baucua")
 async def baucua(ctx, muc_cuoc: int = 100):
     if muc_cuoc <= 0:
@@ -1020,7 +1176,6 @@ async def baucua(ctx, muc_cuoc: int = 100):
         f"👉 {ctx.author.mention}, hãy chọn 1 cửa đặt cược bên dưới trong **30 giây**:",
         view=view,
     )
-
 
 # --- XÌ DÁCH (.xidach) ---
 def tinh_diem_hand(hand):
@@ -1038,7 +1193,6 @@ def tinh_diem_hand(hand):
         val -= 10
         aces -= 1
     return val
-
 
 class BlackjackView(View):
 
@@ -1106,7 +1260,6 @@ class BlackjackView(View):
             view=self,
         )
 
-
 @bot.command(name="xidach")
 async def xidach(ctx, muc_cuoc: int = 100):
     if muc_cuoc <= 0:
@@ -1140,7 +1293,6 @@ async def xidach(ctx, muc_cuoc: int = 100):
         f"🃏 **XÌ DÁCH 21** (Tiền cược: {muc_cuoc} xu)\n• Bài của bạn: {player_hand} (Tổng: **{p_score}**)\n• Bài nhà cái: ['{bot_hand[0]}', '❓']",
         view=view,
     )
-
 
 # --- ĐOÁN SỐ (.doanso) ---
 @bot.command(name="doanso")
@@ -1189,7 +1341,6 @@ async def doanso(ctx, muc_cuoc: int = 100):
 
     await ctx.send(f"😭 Hết lượt đoán! Số bí mật chính xác là `{so_bi_mat}`. Mất **{muc_cuoc} xu**!")
 
-
 # --- TÀI XỈU (.taixiu) ---
 class TaiXiuView(View):
 
@@ -1228,7 +1379,6 @@ class TaiXiuView(View):
             f"✅ {interaction.user.mention} cược **{self.muc_cuoc} xu** cửa **{lua_chon.upper()}**!"
         )
 
-
 @bot.command(name="taixiu")
 async def taixiu(ctx, muc_cuoc: int = 100):
     view = TaiXiuView(muc_cuoc=muc_cuoc)
@@ -1251,7 +1401,7 @@ async def taixiu(ctx, muc_cuoc: int = 100):
     view.da_ket_thuc = True
     for item in view.children:
         item.disabled = True
-    await msg.edit(content="🎲 **HẾT GIỜ CƯỢC! ĐANG LẮC...**", view=view)
+    await msg.edit(content="🎲 **HẾT GIỜ CƯỢC! Đang LẮC...**", view=view)
 
     await asyncio.sleep(1.5)
     x1, x2, x3 = random.randint(1, 6), random.randint(1, 6), random.randint(1, 6)
@@ -1273,14 +1423,12 @@ async def taixiu(ctx, muc_cuoc: int = 100):
 
     await ctx.send(thong_bao)
 
-
 # --- ĐỐ VUI (.dovui & .traloi) ---
 @bot.command(name="dovui")
 async def dovui(ctx):
     question_data = random.choice(QUIZ_DATA)
     CURRENT_QUIZ[ctx.channel.id] = question_data["a"]
     await ctx.send(f"❓ **ĐỐ VUI:** {question_data['q']}\n*(Dùng lệnh `.traloi <đáp án>` để trả lời!)*")
-
 
 @bot.command(name="traloi")
 async def traloi(ctx, *, cau_tra_loi: str):
@@ -1296,7 +1444,6 @@ async def traloi(ctx, *, cau_tra_loi: str):
         await ctx.send(f"🎉 **CHÍNH XÁC!** {ctx.author.mention} đã trả lời đúng và nhận được **+300 xu**.")
     else:
         await ctx.send(f"❌ {ctx.author.mention} trả lời sai rồi, thử lại nhé!")
-
 
 # --- TRỘM TIỀN (.tromtien) ---
 class BaoLanhView(View):
@@ -1330,7 +1477,6 @@ class BaoLanhView(View):
             view=self,
         )
 
-
 @bot.command(name="tromtien")
 async def tromtien(ctx, member: discord.Member):
     if member == ctx.author:
@@ -1362,66 +1508,16 @@ async def tromtien(ctx, member: discord.Member):
 
         ban_doi_id = lay_ban_doi(user_id)
         if ban_doi_id:
-            tien_bao_lanh = random.randint(600, 1000)
-            view = BaoLanhView(user_id, ban_doi_id, tien_bao_lanh)
-            msg_bat += f"\n📢 **THÔNG BÁO BẢO LÃNH:** <@{ban_doi_id}> ơi! Người thân của bạn đã bị bắt. Cần **{tien_bao_lanh} xu** để bảo lãnh ngay lập tức!"
-            await ctx.send(msg_bat, view=view)
+            view = BaoLanhView(user_id, ban_doi_id, 200)
+            await ctx.send(f"{msg_bat}\n💍 Người thân <@{ban_doi_id}> có thể bấm nút dưới đây để đóng tiền bảo lãnh cứu vợ/chồng:", view=view)
         else:
             await ctx.send(msg_bat)
 
-
-# --- BOXING (.boxing) ---
-@bot.command(name="boxing")
-async def boxing(ctx, member: discord.Member):
-    if member == ctx.author:
-        return await ctx.send("❌ Bạn không thể tự đánh mình!")
-    u1, u2 = lay_user_data(ctx.author.id), lay_user_data(member.id)
-    cuoc = 200
-    if u1["vi_tien"] < cuoc or u2["vi_tien"] < cuoc:
-        return await ctx.send(f"❌ Cả hai phải có ít nhất {cuoc} xu!")
-
-    if random.choice([True, False]):
-        cap_nhat_user_data(ctx.author.id, {"vi_tien": u1["vi_tien"] + cuoc})
-        cap_nhat_user_data(member.id, {"vi_tien": u2["vi_tien"] - cuoc})
-        await ctx.send(f"🥊 {ctx.author.mention} hạ gục {member.mention}! Nhận **+{cuoc} xu**.")
-    else:
-        cap_nhat_user_data(ctx.author.id, {"vi_tien": u1["vi_tien"] - cuoc})
-        cap_nhat_user_data(member.id, {"vi_tien": u2["vi_tien"] + cuoc})
-        await ctx.send(f"🥊 {member.mention} phản đòn! {ctx.author.mention} mất **{cuoc} xu**.")
-
-
-# --- VÒNG QUAY MAY MẮN & BÓI TOÁN ---
-@bot.command(name="vqmm")
-async def vqmm(ctx):
-    user_data = lay_user_data(ctx.author.id)
-    kq = random.randint(1, 100)
-    thuong = random.randint(1000, 2000) if kq <= 10 else (random.randint(100, 500) if kq <= 40 else 0)
-
-    if thuong > 0:
-        cap_nhat_user_data(ctx.author.id, {"vi_tien": user_data["vi_tien"] + thuong})
-        await ctx.send(f"🎡 **VÒNG QUAY MAY MẮN:** Bạn nhận **+{thuong} xu**!")
-    else:
-        await ctx.send("🎡 **VÒNG QUAY MAY MẮN:** Rơi vào ô trống! Thử lại sau.")
-
-
-@bot.command(name="tungxu")
-async def tungxu(ctx):
-    await ctx.send(f"🪙 {ctx.author.mention} tung đồng xu: **{random.choice(['SẤP', 'NGỬA'])}**!")
-
-
-@bot.command(name="xemboi")
-async def xemboi(ctx, *, cau_hoi: str):
-    reply = random.choice(EIGHTBALL_RESPONSES)
-    await ctx.send(f"🎱 **Câu hỏi:** {cau_hoi}\n🔮 **Phán:** {reply}")
-
-
-# ==========================================
-# KHỞI CHẠY BOT
-# ==========================================
+# Khởi chạy bot (kèm keep alive web server)
 if __name__ == "__main__":
     keep_alive()
     TOKEN = os.getenv("DISCORD_TOKEN")
     if TOKEN:
         bot.run(TOKEN)
     else:
-        print("❌ Lỗi: Chưa cấu hình DISCORD_TOKEN trong Environment Variables!")
+        print("❌ LỖI: Chưa cấu hình biến môi trường DISCORD_TOKEN!")
