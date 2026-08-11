@@ -879,8 +879,8 @@ async def latbai(ctx, muc_cuoc: int, lua_chon: str):
     else:
         await ctx.send(f"🎴 Lật bài ra màu **{kq.upper()}**! Rất tiếc, bạn đoán sai và mất **{muc_cuoc} xu**.")
 
-@bot.command(name="oanditu")
-async def oanditu(ctx, muc_cuoc: int, lua_chon: str):
+@bot.command(name="oantuxi")
+async def oantuxi(ctx, muc_cuoc: int, lua_chon: str):
     if muc_cuoc <= 0:
         return await ctx.send("❌ Mức cược phải lớn hơn 0!")
     lua_chon = lua_chon.lower()
@@ -904,6 +904,40 @@ async def oanditu(ctx, muc_cuoc: int, lua_chon: str):
         await ctx.send(f"✌️ Bot ra **{bot_chon}**. Bạn thắng **+{thuong} xu**!")
     else:
         await ctx.send(f"✌️ Bot ra **{bot_chon}**. Bạn thua và mất **{muc_cuoc} xu**.")
+
+# --- BỔ SUNG LỆNH XOÁ SỔ TRÚNG THƯỞNG (.xoasobon) ---
+@bot.command(name="xoso")
+async def xoso(ctx, muc_cuoc: int = 100):
+    if muc_cuoc <= 0:
+        return await ctx.send("❌ Mức cược phải lớn hơn 0!")
+    
+    user_data = lay_user_data(ctx.author.id)
+    if user_data["vi_tien"] < muc_cuoc:
+        return await ctx.send("❌ Bạn không đủ tiền trong ví để chơi trò này!")
+
+    cap_nhat_user_data(ctx.author.id, {"vi_tien": user_data["vi_tien"] - muc_cuoc})
+
+    bieu_tuong = ["💰", "💎", "🍀", "🍎", "❌"]
+    o_chon = [random.choice(bieu_tuong) for _ in range(3)]
+
+    if o_chon[0] == o_chon[1] == o_chon[2]:
+        if o_chon[0] == "💎":
+            he_so = 10
+        elif o_chon[0] == "💰":
+            he_so = 5
+        else:
+            he_so = 3
+        thuong = muc_cuoc * he_so
+        cap_nhat_user_data(ctx.author.id, {"vi_tien": lay_user_data(ctx.author.id)["vi_tien"] + thuong + muc_cuoc})
+        ket_qua_txt = f"🎉 **XÓA SỔ TRÚNG LỚN!** Ba ô giống hệt nhau `{o_chon[0]} {o_chon[1]} {o_chon[2]}`! Bạn nhận được **+{thuong} xu** (x{he_so})!"
+    elif o_chon[0] == o_chon[1] or o_chon[1] == o_chon[2] or o_chon[0] == o_chon[2]:
+        thuong = int(muc_cuoc * 1.5)
+        cap_nhat_user_data(ctx.author.id, {"vi_tien": lay_user_data(ctx.author.id)["vi_tien"] + thuong + muc_cuoc})
+        ket_qua_txt = f"✨ **TRÚNG 2 Ô!** Kết quả: `[ {o_chon[0]} | {o_chon[1]} | {o_chon[2]} ]`. Bạn nhận được **+{thuong} xu**!"
+    else:
+        ket_qua_txt = f"🎟️ Kết quả cào sổ: `[ {o_chon[0]} | {o_chon[1]} | {o_chon[2]} ]`. Rất tiếc, không trúng gì cả, bạn mất **{muc_cuoc} xu**!"
+
+    await ctx.send(f"🎫 **XÓA SỔ MAY MẮN**\n{ket_qua_txt}")
 
 @bot.command(name="cauca")
 async def cauca(ctx):
