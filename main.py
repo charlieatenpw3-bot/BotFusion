@@ -992,7 +992,7 @@ async def tuvingay(ctx):
 @bot.command(name="8ball")
 async def eightball(ctx, *, cau_hoi: str):
     tra_ lời = random.choice(EIGHTBALL_RESPONSES)
-    await ctx.send(f"🎱 **Câu hỏi:** {cau_hoi}\n🔮 **Quả cầu trả lời:** {tra_lời}")
+    await ctx.send(f"🎱 **Câu hỏi:** {cau_hoi}\n🔮 **Quả cầu trả lời:** {tra_loi}")
 
 @bot.command(name="tile")
 async def tile(ctx, *, su_viec: str):
